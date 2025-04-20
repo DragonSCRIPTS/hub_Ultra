@@ -1,42 +1,113 @@
--- Módulo de Combate KillAura sem Interface
--- Criado para ser carregado via loadstring
+-- Módulo KillAura Otimizado para Raids
+-- Versão 4.0 - Focado em combate contra múltiplos inimigos
 local CombatModule = {}
 
--- Variáveis do módulo
-CombatModule.killAuraActive = false
+-- Configurações principais
+CombatModule.active = false
+CombatModule.attackRange = 60 -- Aumentado para detectar inimigos mais cedo
+CombatModule.targetEnemy = nil
+CombatModule.enemies = {} -- Armazena todos os inimigos próximos
+CombatModule.normalAttackCooldown = false
+CombatModule.skillKeys = {"Z", "X", "C"}
+CombatModule.evading = false -- Estado de evasão
+CombatModule.statusCallback = function(message) print(message) end
+
+-- Configurações avançadas
 CombatModule.skillsActive = true
 CombatModule.comboModeActive = true
-CombatModule.attackRange = 50
-CombatModule.targetEnemy = nil
-CombatModule.normalAttackCooldown = false
-CombatModule.skillKeys = {"Z", "X", "C"} -- Teclas de skill
-CombatModule.clickDelay = 0.1 -- Delay para ataques em combo
-CombatModule.isInCombo = false
+CombatModule.prioritizeLowHealth = true -- Prioriza inimigos com pouca vida
+CombatModule.safeDistance = 15 -- Distância segura para manter de grupos
+CombatModule.clickDelay = 0.08 -- Reduzido para ataques mais rápidos
 CombatModule.comboHitCount = 0
-CombatModule.maxComboHits = 6 -- Número máximo de hits em um combo
-CombatModule.statusCallback = function(message) print(message) end -- Callback para status (pode ser substituído)
+CombatModule.maxComboHits = 4 -- Reduzido para combos mais curtos e ágeis
+CombatModule.maxEnemyGroupSize = 3 -- Limite de inimigos para considerar grupo
 
--- Sistema de cooldown individual para cada skill
+-- Sistema de cooldown para skills
 CombatModule.skillCooldowns = {
-    Z = {active = false, cooldown = 3}, -- 3 segundos de cooldown para Z
-    X = {active = false, cooldown = 5}, -- 5 segundos para X
-    C = {active = false, cooldown = 7}  -- 7 segundos para C
+    Z = {active = false, cooldown = 2.5}, -- Cooldowns reduzidos
+    X = {active = false, cooldown = 4},
+    C = {active = false, cooldown = 6}
 }
 
--- Função para verificar se o inimigo está com pouca vida
+-- Funções utilitárias
 function CombatModule.IsLowHealth(humanoid)
-    return humanoid.Health <= humanoid.MaxHealth * 0.3 -- Considera baixa quando está abaixo de 30%
+    return humanoid and humanoid.Health <= humanoid.MaxHealth * 0.4 -- Aumentado para 40%
 end
 
--- Função para verificar quais skills estão disponíveis
 function CombatModule.GetAvailableSkills()
     local available = {}
     for key, data in pairs(CombatModule.skillCooldowns) do
-        if not data.active then
-            table.insert(available, key)
-        end
+        if not data.active then table.insert(available, key) end
     end
     return available
+end
+
+-- Sistema de detecção de grupos de inimigos
+function CombatModule.IsInDangerousGroup(enemy)
+    if not enemy or not enemy:FindFirstChild("HumanoidRootPart") then return false end
+    
+    local enemyPos = enemy.HumanoidRootPart.Position
+    local groupSize = 0
+    
+    for _, otherEnemy in pairs(CombatModule.enemies) do
+        if otherEnemy ~= enemy and otherEnemy:FindFirstChild("HumanoidRootPart") then
+            local distance = (enemyPos - otherEnemy.HumanoidRootPart.Position).Magnitude
+            if distance < 12 then -- Próximos o suficiente para ser considerados grupo
+                groupSize = groupSize + 1
+                if groupSize >= CombatModule.maxEnemyGroupSize then
+                    return true
+                end
+            end
+        end
+    end
+    
+    return false
+end
+
+-- Sistema de evasão melhorado
+function CombatModule.EvadeFromGroups()
+    if CombatModule.evading then return end
+    
+    local player = game.Players.LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+    local hrp = character:WaitForChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChild("Humanoid")
+    
+    -- Verificar se há grupos perigosos próximos
+    local dangerousGroups = {}
+    for _, enemy in pairs(CombatModule.enemies) do
+        if CombatModule.IsInDangerousGroup(enemy) then
+            table.insert(dangerousGroups, enemy)
+        end
+    end
+    
+    if #dangerousGroups > 0 then
+        CombatModule.evading = true
+        CombatModule.statusCallback("⚠️ Evasão de grupo iniciada!")
+        
+        -- Encontrar direção de fuga (oposta ao centro do grupo)
+        local groupCenter = Vector3.new(0,0,0)
+        for _, enemy in pairs(dangerousGroups) do
+            if enemy:FindFirstChild("HumanoidRootPart") then
+                groupCenter = groupCenter + enemy.HumanoidRootPart.Position
+            end
+        end
+        groupCenter = groupCenter / #dangerousGroups
+        
+        -- Direção oposta ao grupo + alguma altura
+        local direction = (hrp.Position - groupCenter).Unit
+        local escapePos = hrp.Position + direction * 20 + Vector3.new(0, 5, 0)
+        
+        -- Executar a evasão
+        local oldPos = hrp.CFrame
+        hrp.CFrame = CFrame.new(escapePos)
+        
+        -- Esperar até completar a evasão
+        spawn(function()
+            wait(0.5)
+            CombatModule.evading = false
+        end)
+    end
 end
 
 -- Função para usar uma skill específica
@@ -46,14 +117,13 @@ function CombatModule.UseSkill(key)
     -- Marcar a skill como em cooldown
     CombatModule.skillCooldowns[key].active = true
     
-    -- Usar a skill
+    -- Usar a skill com input virtual
     local VirtualInputManager = game:GetService("VirtualInputManager")
     VirtualInputManager:SendKeyEvent(true, key, false, game)
-    wait(0.1)
+    wait(0.08) -- Reduzido para 80ms
     VirtualInputManager:SendKeyEvent(false, key, false, game)
     
-    -- Interromper qualquer combo atual
-    CombatModule.isInCombo = false
+    -- Reiniciar o status de combo
     CombatModule.comboHitCount = 0
     
     -- Iniciar o cooldown
@@ -62,42 +132,46 @@ function CombatModule.UseSkill(key)
         CombatModule.skillCooldowns[key].active = false
     end)
     
-    CombatModule.statusCallback("Usando skill " .. key)
+    CombatModule.statusCallback("Skill " .. key .. " ⚡")
     return true
 end
 
--- Função para selecionar e usar a melhor skill disponível
-function CombatModule.UseBestAvailableSkill(isLowHealth)
+-- Função para selecionar e usar a melhor skill baseada nas circunstâncias
+function CombatModule.UseBestSkill(enemy)
     local availableSkills = CombatModule.GetAvailableSkills()
+    if #availableSkills == 0 then return false end
     
-    if #availableSkills == 0 then
-        CombatModule.statusCallback("Todas skills em cooldown")
-        return false
-    end
-    
+    local isLowHealth = CombatModule.IsLowHealth(enemy:FindFirstChild("Humanoid"))
+    local isInGroup = CombatModule.IsInDangerousGroup(enemy)
     local selectedKey
     
-    if isLowHealth then
-        -- Prioridade para skills fortes quando inimigo está com pouca vida
+    -- Lógica de prioridade avançada
+    if isInGroup then
+        -- Priorizar skills AOE/fortes para grupos
         for _, key in ipairs({"C", "X", "Z"}) do
             if table.find(availableSkills, key) then
                 selectedKey = key
                 break
             end
         end
-    else
-        -- Em outros casos, priorizamos skills mais fracas para economizar as fortes
-        for _, key in ipairs({"Z", "X", "C"}) do
+    elseif isLowHealth then
+        -- Priorizar skills de finalização
+        for _, key in ipairs({"Z", "X"}) do
             if table.find(availableSkills, key) then
                 selectedKey = key
                 break
             end
         end
-    end
-    
-    -- Se não encontrou nenhuma das preferidas, pega a primeira disponível
-    if not selectedKey and #availableSkills > 0 then
-        selectedKey = availableSkills[1]
+    else
+        -- Em outros casos, economizar skills fortes
+        if math.random(1, 10) <= 4 then -- 40% de chance de usar skill
+            for _, key in ipairs({"Z", "X", "C"}) do
+                if table.find(availableSkills, key) then
+                    selectedKey = key
+                    break
+                end
+            end
+        end
     end
     
     if selectedKey then
@@ -107,338 +181,345 @@ function CombatModule.UseBestAvailableSkill(isLowHealth)
     return false
 end
 
--- Sistema de Combo Aprimorado
+-- Sistema de Combo Otimizado
 function CombatModule.ExecuteComboAttack()
+    if CombatModule.normalAttackCooldown then return false end
+    CombatModule.normalAttackCooldown = true
+    
+    -- Sistema de combo dinâmico
+    if CombatModule.comboHitCount >= CombatModule.maxComboHits then
+        CombatModule.comboHitCount = 0
+        wait(0.3) -- Pausa curta ao final do combo
+    else
+        CombatModule.comboHitCount = CombatModule.comboHitCount + 1
+    end
+    
+    -- Clique para atacar com padrão de combo variável
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    
+    -- Padrões diferentes de ataque baseados no número do combo
+    if CombatModule.comboHitCount % 4 == 1 then
+        -- Ataque rápido simples
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        wait(0.04)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    elseif CombatModule.comboHitCount % 4 == 2 then
+        -- Clique duplo
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        wait(0.03)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        wait(0.03)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        wait(0.03)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    elseif CombatModule.comboHitCount % 4 == 3 then
+        -- Ataque segurado
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        wait(0.12)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    else
+        -- Ataque final
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        wait(0.03)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        wait(0.05)
+        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    end
+    
+    -- Cooldown entre hits do combo
+    spawn(function()
+        wait(CombatModule.clickDelay)
+        CombatModule.normalAttackCooldown = false
+    end)
+    
+    return true
+end
+
+-- Função simples para ataque rápido
+function CombatModule.UseQuickAttack()
     if CombatModule.normalAttackCooldown then return false end
     
     CombatModule.normalAttackCooldown = true
     
-    -- Se não estiver em um combo, iniciamos um novo
-    if not CombatModule.isInCombo then
-        CombatModule.isInCombo = true
-        CombatModule.comboHitCount = 1
-    else
-        -- Se já estiver em um combo, incrementamos o contador
-        CombatModule.comboHitCount = CombatModule.comboHitCount + 1
-        if CombatModule.comboHitCount > CombatModule.maxComboHits then
-            -- Resetar o combo após atingir o máximo
-            wait(0.5) -- Pausa para finalizar o combo
-            CombatModule.isInCombo = false
-            CombatModule.comboHitCount = 0
-            CombatModule.normalAttackCooldown = false
-            return true
-        end
-    end
+    local VirtualInputManager = game:GetService("VirtualInputManager")
+    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+    wait(0.04)
+    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
     
-    -- Ajustar a posição do atacante em relação ao alvo para maximizar o hit
-    -- Posições diferentes para cada hit do combo, girando ao redor do alvo
+    spawn(function()
+        wait(CombatModule.clickDelay)
+        CombatModule.normalAttackCooldown = false
+    end)
+    
+    return true
+end
+
+-- Função para atualizar a lista de inimigos próximos
+function CombatModule.UpdateEnemiesList()
     local player = game.Players.LocalPlayer
     local character = player.Character or player.CharacterAdded:Wait()
     local hrp = character:WaitForChild("HumanoidRootPart")
-    local VirtualInputManager = game:GetService("VirtualInputManager")
     
-    if CombatModule.targetEnemy and CombatModule.targetEnemy:FindFirstChild("HumanoidRootPart") then
-        local angle = (CombatModule.comboHitCount % 4) * (math.pi / 2) -- Gira em 90 graus
-        local offset = CFrame.new(math.cos(angle) * 3, 0, math.sin(angle) * 3)
-        
-        -- Salvar posição original
-        local originalPos = hrp.CFrame
-        
-        -- Movimentar para a posição ideal de ataque
-        hrp.CFrame = CombatModule.targetEnemy.HumanoidRootPart.CFrame * offset
-        
-        -- Executar o ataque com variações baseadas no número do combo
-        wait(0.05) -- Pequena pausa para garantir o posicionamento
-        
-        -- Variação no tipo de clique baseado no número do combo
-        if CombatModule.comboHitCount % 3 == 1 then
-            -- Clique simples (jab)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-            wait(0.05)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-        elseif CombatModule.comboHitCount % 3 == 2 then
-            -- Clique duplo rápido (combo hit)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-            wait(0.03)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-            wait(0.03)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-            wait(0.03)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-        else
-            -- Clique segurando (poder)
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-            wait(0.15) -- Segura por mais tempo
-            VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    CombatModule.enemies = {}
+    
+    -- Buscar em locais comuns de inimigos
+    local searchLocations = {
+        game.Workspace:FindFirstChild("Enemies"),
+        game.Workspace:FindFirstChild("NPCs"),
+        game.Workspace:FindFirstChild("Mobs"),
+        game.Workspace:FindFirstChild("Raid"),
+        game.Workspace:FindFirstChild("RaidBosses"),
+        game.Workspace
+    }
+    
+    for _, location in pairs(searchLocations) do
+        if location then
+            for _, obj in pairs(location:GetChildren()) do
+                if obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") and 
+                   obj.Humanoid.Health > 0 and obj ~= character then
+                    
+                    -- Verificar se não é um jogador
+                    local isPlayer = false
+                    for _, p in pairs(game.Players:GetPlayers()) do
+                        if p.Character == obj then isPlayer = true break end
+                    end
+                    
+                    if not isPlayer then
+                        local distance = (hrp.Position - obj.HumanoidRootPart.Position).Magnitude
+                        if distance <= CombatModule.attackRange then
+                            table.insert(CombatModule.enemies, obj)
+                        end
+                    end
+                end
+            end
         end
-        
-        -- Voltar à posição original com ligeiro atraso para simular movimento natural
-        wait(0.02)
-        hrp.CFrame = originalPos
     end
     
-    -- Definir um tempo de cooldown mais curto para manter o ritmo do combo
-    local comboSpeed = 0.15 -- Tempo entre hits do combo
-    
-    spawn(function()
-        wait(comboSpeed)
-        CombatModule.normalAttackCooldown = false
-    end)
-    
-    CombatModule.statusCallback("Combo Hit #" .. CombatModule.comboHitCount)
-    return true
+    return #CombatModule.enemies
 end
 
--- Função para usar ataque normal (sem combo)
-function CombatModule.UseNormalAttack()
-    if CombatModule.normalAttackCooldown then return false end
+-- Função para escolher o melhor alvo baseado na situação
+function CombatModule.SelectBestTarget()
+    if #CombatModule.enemies == 0 then return nil end
     
-    CombatModule.normalAttackCooldown = true
+    local player = game.Players.LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+    local hrp = character:WaitForChild("HumanoidRootPart")
     
-    -- Simula um clique do mouse para ataque normal
-    local VirtualInputManager = game:GetService("VirtualInputManager")
-    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-    wait(0.05)
-    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    -- Primeira prioridade: inimigos isolados com pouca vida
+    if CombatModule.prioritizeLowHealth then
+        for _, enemy in pairs(CombatModule.enemies) do
+            if enemy:FindFirstChild("Humanoid") and 
+               CombatModule.IsLowHealth(enemy.Humanoid) and
+               not CombatModule.IsInDangerousGroup(enemy) then
+                
+                return enemy
+            end
+        end
+    end
     
-    -- Define um tempo de cooldown para não sobrecarregar
-    spawn(function()
-        wait(CombatModule.clickDelay) -- Delay entre ataques normais
-        CombatModule.normalAttackCooldown = false
-    end)
+    -- Segunda prioridade: inimigo mais próximo que não esteja em grupo
+    local nearestDistance = CombatModule.attackRange
+    local nearestEnemy = nil
     
-    CombatModule.statusCallback("Usando ataque normal")
-    return true
+    for _, enemy in pairs(CombatModule.enemies) do
+        if enemy:FindFirstChild("HumanoidRootPart") and
+           not CombatModule.IsInDangerousGroup(enemy) then
+            
+            local distance = (hrp.Position - enemy.HumanoidRootPart.Position).Magnitude
+            if distance < nearestDistance then
+                nearestDistance = distance
+                nearestEnemy = enemy
+            end
+        end
+    end
+    
+    if nearestEnemy then return nearestEnemy end
+    
+    -- Terceira prioridade: qualquer inimigo, até mesmo em grupo
+    -- Mas vamos pegar o mais fraco do grupo
+    local weakestEnemy = nil
+    local lowestHealth = math.huge
+    
+    for _, enemy in pairs(CombatModule.enemies) do
+        if enemy:FindFirstChild("Humanoid") and enemy:FindFirstChild("HumanoidRootPart") then
+            if enemy.Humanoid.Health < lowestHealth then
+                lowestHealth = enemy.Humanoid.Health
+                weakestEnemy = enemy
+            end
+        end
+    end
+    
+    return weakestEnemy
 end
 
--- Função KillAura Aprimorada
+-- Função principal KillAura otimizada
 function CombatModule.PerformKillAura()
     local player = game.Players.LocalPlayer
     local character = player.Character or player.CharacterAdded:Wait()
     local hrp = character:WaitForChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChild("Humanoid")
     
-    -- Expandir o raio de simulação
-    pcall(function()
-        sethiddenproperty(player, "SimulationRadius", math.huge)
+    -- Expandir raio de simulação para alcançar mais longe
+    pcall(function() 
+        sethiddenproperty(player, "SimulationRadius", 1000)
     end)
     
-    -- Exibir informações de cooldown das skills
-    local cooldownInfo = "Skills: "
-    for key, data in pairs(CombatModule.skillCooldowns) do
-        if data.active then
-            cooldownInfo = cooldownInfo .. key .. "(CD), "
-        else
-            cooldownInfo = cooldownInfo .. key .. "(✓), "
-        end
-    end
-    cooldownInfo = cooldownInfo:sub(1, -3) -- Remover última vírgula e espaço
+    -- Atualizar lista de inimigos
+    CombatModule.UpdateEnemiesList()
     
-    -- Se já temos um alvo, verifica se ele ainda é válido
-    if CombatModule.targetEnemy and CombatModule.targetEnemy:FindFirstChild("Humanoid") and 
-       CombatModule.targetEnemy.Humanoid.Health > 0 and CombatModule.targetEnemy:FindFirstChild("HumanoidRootPart") then
-        local distance = (hrp.Position - CombatModule.targetEnemy.HumanoidRootPart.Position).Magnitude
+    -- Verificar se precisamos evadir de grupos
+    if #CombatModule.enemies >= CombatModule.maxEnemyGroupSize then
+        CombatModule.EvadeFromGroups()
+        if CombatModule.evading then return end -- Aguardar evasão completar
+    end
+    
+    -- Exibir informações de status
+    local cooldownInfo = ""
+    for key, data in pairs(CombatModule.skillCooldowns) do
+        cooldownInfo = cooldownInfo .. (data.active and "⌛" or "✅") .. key .. " "
+    end
+    
+    -- Selecionar o melhor alvo
+    local bestTarget = CombatModule.SelectBestTarget()
+    
+    -- Se temos um alvo válido
+    if bestTarget and bestTarget:FindFirstChild("Humanoid") and 
+       bestTarget.Humanoid.Health > 0 and bestTarget:FindFirstChild("HumanoidRootPart") then
         
-        if distance <= CombatModule.attackRange then
-            -- Atualizar status
-            local statusText = "Atacando a " .. math.floor(distance) .. " studs"
-            if CombatModule.isInCombo then
-                statusText = statusText .. " | Combo: " .. CombatModule.comboHitCount .. "/" .. CombatModule.maxComboHits
-            end
-            CombatModule.statusCallback(statusText .. " | " .. cooldownInfo)
+        local distance = (hrp.Position - bestTarget.HumanoidRootPart.Position).Magnitude
+        local isInGroup = CombatModule.IsInDangerousGroup(bestTarget)
+        
+        -- Posicionamento tático
+        local posOffset = isInGroup and 7 or 4 -- Maior distância se for grupo
+        
+        -- Salvar posição original
+        local oldPos = hrp.CFrame
+        
+        -- Estratégia de ataque
+        if isInGroup then
+            -- Para grupos: manter distância e usar skills mais fortes
+            hrp.CFrame = bestTarget.HumanoidRootPart.CFrame * CFrame.new(0, 1, posOffset)
             
-            -- Guardar posição original
-            local oldPos = hrp.CFrame
-            
-            -- Verificar se inimigo está com pouca vida
-            local isLowHealth = CombatModule.IsLowHealth(CombatModule.targetEnemy.Humanoid)
-            
-            -- Posicionar estrategicamente perto do inimigo para atacar
-            -- No modo combo, o posicionamento será feito na função ExecuteComboAttack
-            if not CombatModule.comboModeActive or not CombatModule.isInCombo then
-                hrp.CFrame = CombatModule.targetEnemy.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
-            end
-            
-            local attackSuccess = false
-            
-            -- Sistema de ataque priorizado
+            -- Prioridade absoluta para skills em grupos
             if CombatModule.skillsActive then
-                -- Quando inimigo tem pouca vida, usar skills sempre que possível
-                if isLowHealth then
-                    -- Tentar usar a melhor skill disponível
-                    attackSuccess = CombatModule.UseBestAvailableSkill(true)
-                else
-                    -- Quando inimigo tem muita vida, usar skills com 30% de chance
-                    -- Reduzido para dar mais prioridade aos combos no modo normal
-                    if math.random(1, 10) <= 3 then
-                        attackSuccess = CombatModule.UseBestAvailableSkill(false)
-                    end
+                CombatModule.UseBestSkill(bestTarget)
+            else
+                CombatModule.UseQuickAttack() -- Ataque rápido sem combo para grupos
+            end
+        else
+            -- Para inimigos isolados: aproximar e usar combo ou skill
+            hrp.CFrame = bestTarget.HumanoidRootPart.CFrame * CFrame.new(0, 0, posOffset)
+            
+            -- Verificar se devemos usar skill ou ataque normal
+            local usedSkill = false
+            if CombatModule.skillsActive then
+                -- Priorizar skill se inimigo com pouca vida
+                if CombatModule.IsLowHealth(bestTarget.Humanoid) then
+                    usedSkill = CombatModule.UseBestSkill(bestTarget)
+                elseif math.random(1, 10) <= 3 then
+                    -- 30% de chance para outros casos
+                    usedSkill = CombatModule.UseBestSkill(bestTarget)
                 end
             end
             
-            -- Se não conseguiu usar skill, usar ataque (normal ou combo)
-            if not attackSuccess then
+            -- Se não usou skill, usar ataque normal
+            if not usedSkill then
                 if CombatModule.comboModeActive then
                     CombatModule.ExecuteComboAttack()
                 else
-                    CombatModule.UseNormalAttack()
+                    CombatModule.UseQuickAttack()
                 end
             end
-            
-            -- Verificar se o inimigo morreu
-            if not CombatModule.targetEnemy:FindFirstChild("Humanoid") or CombatModule.targetEnemy.Humanoid.Health <= 0 then
-                CombatModule.statusCallback("Inimigo eliminado! | " .. cooldownInfo)
-                CombatModule.targetEnemy = nil
-                CombatModule.isInCombo = false
-                CombatModule.comboHitCount = 0
-            end
-            
-            -- Voltar à posição original (se não estiver em combo)
-            if not CombatModule.isInCombo then
-                wait(0.1)
-                hrp.CFrame = oldPos
-            end
-            
-            return -- Saímos da função porque já processamos o alvo
-        else
-            -- Alvo fora de alcance, limpa o alvo atual
-            CombatModule.targetEnemy = nil
-            CombatModule.isInCombo = false
-            CombatModule.comboHitCount = 0
-            CombatModule.statusCallback("Alvo fora de alcance | " .. cooldownInfo)
         end
+        
+        -- Status do alvo
+        local health = math.floor((bestTarget.Humanoid.Health / bestTarget.Humanoid.MaxHealth) * 100)
+        local statusIcon = isInGroup and "⚠️ GRUPO" or "🎯"
+        CombatModule.statusCallback(statusIcon .. " Alvo: " .. health .. "% | " .. cooldownInfo)
+        
+        -- Verificar se o alvo morreu
+        if bestTarget.Humanoid.Health <= 0 then
+            CombatModule.statusCallback("✅ Inimigo eliminado!")
+        end
+        
+        -- Voltar à posição original com delay
+        spawn(function()
+            wait(0.15)
+            hrp.CFrame = oldPos
+        end)
     else
-        -- Limpa o alvo se não for mais válido
-        CombatModule.targetEnemy = nil
-        CombatModule.isInCombo = false
-        CombatModule.comboHitCount = 0
-    end
-    
-    -- Se não temos um alvo, procurar por novos inimigos
-    local nearestDistance = CombatModule.attackRange
-    local nearestEnemy = nil
-    
-    -- Verificar em Workspace.Enemies (estrutura comum em muitos jogos)
-    if game.Workspace:FindFirstChild("Enemies") then
-        for _, enemy in pairs(game.Workspace.Enemies:GetChildren()) do
-            if enemy:FindFirstChild("Humanoid") and enemy:FindFirstChild("HumanoidRootPart") and enemy.Humanoid.Health > 0 then
-                local distance = (hrp.Position - enemy.HumanoidRootPart.Position).Magnitude
-                
-                if distance <= nearestDistance then
-                    nearestDistance = distance
-                    nearestEnemy = enemy
-                end
-            end
-        end
-    end
-    
-    -- Se não encontrou em Enemies, procura direto no Workspace (para jogos que usam outra estrutura)
-    if not nearestEnemy then
-        for _, obj in pairs(game.Workspace:GetChildren()) do
-            if obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") and 
-               obj.Humanoid.Health > 0 and obj ~= character then
-                
-                -- Verificar se parece ser um inimigo (não é outro jogador)
-                local isPlayer = false
-                for _, p in pairs(game.Players:GetPlayers()) do
-                    if p.Character == obj then
-                        isPlayer = true
-                        break
-                    end
-                end
-                
-                if not isPlayer then
-                    local distance = (hrp.Position - obj.HumanoidRootPart.Position).Magnitude
-                    if distance <= nearestDistance then
-                        nearestDistance = distance
-                        nearestEnemy = obj
-                    end
-                end
-            end
-        end
-    end
-    
-    -- Se encontramos um novo alvo, definimos ele como o alvo atual
-    if nearestEnemy then
-        CombatModule.targetEnemy = nearestEnemy
-        CombatModule.statusCallback("Novo alvo a " .. math.floor(nearestDistance) .. " studs | " .. cooldownInfo)
-    else
-        CombatModule.statusCallback("Procurando alvos... | " .. cooldownInfo)
+        CombatModule.statusCallback("🔍 Procurando (" .. #CombatModule.enemies .. " próximos) | " .. cooldownInfo)
     end
 end
 
 -- Função para iniciar o KillAura
-function CombatModule.StartKillAura()
-    if CombatModule.killAuraActive then return end
+function CombatModule.Start()
+    if CombatModule.active then return end
     
-    CombatModule.killAuraActive = true
-    CombatModule.statusCallback("KillAura ativado")
+    CombatModule.active = true
+    CombatModule.statusCallback("✅ KillAura Anti-Raid ativado")
     
-    -- Inicia o loop do KillAura
+    -- Loop principal otimizado
     spawn(function()
-        while CombatModule.killAuraActive and wait(0.2) do -- 0.2 segundos para ser mais responsivo
+        while CombatModule.active and wait(0.15) do -- Loop mais rápido para melhor resposta
             pcall(CombatModule.PerformKillAura)
         end
     end)
 end
 
 -- Função para parar o KillAura
-function CombatModule.StopKillAura()
-    CombatModule.killAuraActive = false
-    CombatModule.statusCallback("KillAura desativado")
-    CombatModule.targetEnemy = nil -- Limpar alvo ao desativar
-    CombatModule.isInCombo = false -- Resetar estado de combo
+function CombatModule.Stop()
+    CombatModule.active = false
+    CombatModule.statusCallback("❌ KillAura desativado")
     CombatModule.comboHitCount = 0
+    CombatModule.enemies = {}
 end
 
 -- Função para alternar o KillAura
-function CombatModule.ToggleKillAura()
-    if CombatModule.killAuraActive then
-        CombatModule.StopKillAura()
+function CombatModule.Toggle()
+    if CombatModule.active then
+        CombatModule.Stop()
     else
-        CombatModule.StartKillAura()
+        CombatModule.Start()
     end
-    return CombatModule.killAuraActive
+    return CombatModule.active
 end
 
--- Função para ativar/desativar o uso de skills
+-- Funções auxiliares mantidas para compatibilidade
+CombatModule.ToggleKillAura = CombatModule.Toggle
+CombatModule.StartKillAura = CombatModule.Start
+CombatModule.StopKillAura = CombatModule.Stop
+CombatModule.killAuraActive = CombatModule.active
+
+-- Função para alternar uso de skills
 function CombatModule.ToggleSkills()
     CombatModule.skillsActive = not CombatModule.skillsActive
-    
-    if CombatModule.skillsActive then
-        CombatModule.statusCallback("Skills ativadas")
-    else
-        CombatModule.statusCallback("Skills desativadas")
-    end
-    
+    CombatModule.statusCallback(CombatModule.skillsActive and "Skills ✅" or "Skills ❌")
     return CombatModule.skillsActive
 end
 
--- Função para ativar/desativar o modo combo
+-- Função para alternar modo combo
 function CombatModule.ToggleComboMode()
     CombatModule.comboModeActive = not CombatModule.comboModeActive
-    CombatModule.isInCombo = false -- Resetar estado de combo ao trocar de modo
     CombatModule.comboHitCount = 0
-    
-    if CombatModule.comboModeActive then
-        CombatModule.statusCallback("Modo Combo ativado")
-    else
-        CombatModule.statusCallback("Modo Combo desativado")
-    end
-    
+    CombatModule.statusCallback(CombatModule.comboModeActive and "Combo ✅" or "Combo ❌")
     return CombatModule.comboModeActive
 end
 
--- Função para definir o alcance do KillAura
+-- Função para definir o alcance
 function CombatModule.SetRange(range)
     if tonumber(range) and tonumber(range) > 0 then
         CombatModule.attackRange = tonumber(range)
-        CombatModule.statusCallback("Alcance ajustado para " .. CombatModule.attackRange)
+        CombatModule.statusCallback("Alcance: " .. CombatModule.attackRange)
         return true
     end
     return false
 end
 
--- Função para definir callback de status (para integração com UI)
+-- Função para definir callback de status
 function CombatModule.SetStatusCallback(callback)
     if type(callback) == "function" then
         CombatModule.statusCallback = callback
@@ -447,7 +528,6 @@ function CombatModule.SetStatusCallback(callback)
     return false
 end
 
--- Mensagem de inicialização
-print("Módulo de Combate KillAura Avançado v3 carregado!")
+print("Módulo KillAura Anti-Raid v4.0 carregado!")
 
 return CombatModule
