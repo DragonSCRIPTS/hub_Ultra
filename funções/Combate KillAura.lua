@@ -1,60 +1,162 @@
--- Módulo KillAura Otimizado para Raids
--- Versão 4.0 - Focado em combate contra múltiplos inimigos
-local CombatModule = {}
+-- Módulo KillAura Otimizado para Raids - Versão 5.0
+-- Focado em combate esquiva-ataque contra múltiplos inimigos
+local KillAura = {}
 
--- Configurações principais
-CombatModule.active = false
-CombatModule.attackRange = 60 -- Aumentado para detectar inimigos mais cedo
-CombatModule.targetEnemy = nil
-CombatModule.enemies = {} -- Armazena todos os inimigos próximos
-CombatModule.normalAttackCooldown = false
-CombatModule.skillKeys = {"Z", "X", "C"}
-CombatModule.evading = false -- Estado de evasão
-CombatModule.statusCallback = function(message) print(message) end
+-- Configurações principais (simplificadas)
+KillAura.active = false
+KillAura.enemies = {}
+KillAura.cooldown = false
+KillAura.evading = false
+KillAura.detectionRange = 1000 -- Detecção máxima fixa
+KillAura.comboCount = 0
+KillAura.maxCombo = 3
+KillAura.skillKeys = {"Z", "X", "C"}
+KillAura.log = function(msg) print(msg) end
 
--- Configurações avançadas
-CombatModule.skillsActive = true
-CombatModule.comboModeActive = true
-CombatModule.prioritizeLowHealth = true -- Prioriza inimigos com pouca vida
-CombatModule.safeDistance = 15 -- Distância segura para manter de grupos
-CombatModule.clickDelay = 0.08 -- Reduzido para ataques mais rápidos
-CombatModule.comboHitCount = 0
-CombatModule.maxComboHits = 4 -- Reduzido para combos mais curtos e ágeis
-CombatModule.maxEnemyGroupSize = 3 -- Limite de inimigos para considerar grupo
-
--- Sistema de cooldown para skills
-CombatModule.skillCooldowns = {
-    Z = {active = false, cooldown = 2.5}, -- Cooldowns reduzidos
-    X = {active = false, cooldown = 4},
-    C = {active = false, cooldown = 6}
+-- Cooldowns de skills
+KillAura.skills = {
+    Z = {cooldown = false, time = 2.0},
+    X = {cooldown = false, time = 3.5},
+    C = {cooldown = false, time = 5.0}
 }
 
--- Funções utilitárias
-function CombatModule.IsLowHealth(humanoid)
-    return humanoid and humanoid.Health <= humanoid.MaxHealth * 0.4 -- Aumentado para 40%
-end
-
-function CombatModule.GetAvailableSkills()
-    local available = {}
-    for key, data in pairs(CombatModule.skillCooldowns) do
-        if not data.active then table.insert(available, key) end
+-- Sistema de combate avançado
+function KillAura.Attack(enemy)
+    if KillAura.cooldown then return end
+    KillAura.cooldown = true
+    
+    local VIM = game:GetService("VirtualInputManager")
+    local isLowHealth = enemy:FindFirstChild("Humanoid") and 
+                        enemy.Humanoid.Health <= enemy.Humanoid.MaxHealth * 0.4
+    local isGroup = KillAura.IsInDangerousGroup(enemy)
+    
+    -- Escolher melhor ataque baseado na situação
+    if isGroup then
+        -- Contra grupos: usar skills poderosas ou ataques rápidos
+        local skillUsed = false
+        
+        -- Tentar usar a skill mais forte disponível
+        for _, key in ipairs({"C", "X", "Z"}) do
+            if not KillAura.skills[key].cooldown then
+                KillAura.UseSkill(key)
+                skillUsed = true
+                break
+            end
+        end
+        
+        -- Se não usou skill, fazer um ataque rápido
+        if not skillUsed then
+            VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+            wait(0.04)
+            VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+        end
+    elseif isLowHealth then
+        -- Contra inimigos fracos: finalizar com skill
+        local skillUsed = false
+        for _, key in ipairs({"Z", "X"}) do
+            if not KillAura.skills[key].cooldown then
+                KillAura.UseSkill(key)
+                skillUsed = true
+                break
+            end
+        end
+        
+        -- Se não tiver skills, usar combo
+        if not skillUsed then KillAura.ExecuteCombo() end
+    else
+        -- Em outros casos: usar combo normal
+        KillAura.ExecuteCombo()
     end
-    return available
+    
+    -- Resetar cooldown
+    spawn(function()
+        wait(0.07)
+        KillAura.cooldown = false
+    end)
 end
 
--- Sistema de detecção de grupos de inimigos
-function CombatModule.IsInDangerousGroup(enemy)
+-- Sistema de combo otimizado
+function KillAura.ExecuteCombo()
+    local VIM = game:GetService("VirtualInputManager")
+    
+    -- Atualizar contador de combo
+    KillAura.comboCount = (KillAura.comboCount % KillAura.maxCombo) + 1
+    
+    -- Executar ataque baseado no número do combo
+    if KillAura.comboCount == 1 then
+        -- Ataque inicial rápido
+        VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        wait(0.03)
+        VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    elseif KillAura.comboCount == 2 then
+        -- Ataque duplo
+        for i = 1, 2 do
+            VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+            wait(0.03)
+            VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+            wait(0.03)
+        end
+    else
+        -- Ataque final forte
+        VIM:SendMouseButtonEvent(0, 0, 0, true, game, 0)
+        wait(0.1)
+        VIM:SendMouseButtonEvent(0, 0, 0, false, game, 0)
+    end
+end
+
+-- Sistema de esquiva avançado
+function KillAura.Evade()
+    if KillAura.evading then return end
+    KillAura.evading = true
+    
+    local player = game.Players.LocalPlayer
+    local character = player.Character or player.CharacterAdded:Wait()
+    local hrp = character:WaitForChild("HumanoidRootPart")
+    
+    -- Determinar direção de esquiva (oposta à maior concentração de inimigos)
+    local enemiesCenter = Vector3.new(0,0,0)
+    local count = 0
+    
+    for _, enemy in pairs(KillAura.enemies) do
+        if enemy:FindFirstChild("HumanoidRootPart") then
+            enemiesCenter = enemiesCenter + enemy.HumanoidRootPart.Position
+            count = count + 1
+        end
+    end
+    
+    if count > 0 then
+        enemiesCenter = enemiesCenter / count
+        local direction = (hrp.Position - enemiesCenter).Unit
+        local escapePos = hrp.Position + direction * 25 + Vector3.new(0, 8, 0)
+        local oldPos = hrp.CFrame
+        
+        -- Executar teleporte evasivo
+        hrp.CFrame = CFrame.new(escapePos)
+        KillAura.log("⚡ Esquiva executada!")
+        
+        -- Esperar e retornar ao combate
+        spawn(function()
+            wait(0.7)
+            KillAura.evading = false
+        end)
+    else
+        KillAura.evading = false
+    end
+end
+
+-- Verificar se inimigo está em grupo perigoso
+function KillAura.IsInDangerousGroup(enemy)
     if not enemy or not enemy:FindFirstChild("HumanoidRootPart") then return false end
     
     local enemyPos = enemy.HumanoidRootPart.Position
-    local groupSize = 0
+    local nearbyCount = 0
     
-    for _, otherEnemy in pairs(CombatModule.enemies) do
-        if otherEnemy ~= enemy and otherEnemy:FindFirstChild("HumanoidRootPart") then
-            local distance = (enemyPos - otherEnemy.HumanoidRootPart.Position).Magnitude
-            if distance < 12 then -- Próximos o suficiente para ser considerados grupo
-                groupSize = groupSize + 1
-                if groupSize >= CombatModule.maxEnemyGroupSize then
+    for _, other in pairs(KillAura.enemies) do
+        if other ~= enemy and other:FindFirstChild("HumanoidRootPart") then
+            local dist = (enemyPos - other.HumanoidRootPart.Position).Magnitude
+            if dist < 15 then -- Aumentado para melhor detecção de grupos
+                nearbyCount = nearbyCount + 1
+                if nearbyCount >= 2 then -- 3 total incluindo este
                     return true
                 end
             end
@@ -64,205 +166,41 @@ function CombatModule.IsInDangerousGroup(enemy)
     return false
 end
 
--- Sistema de evasão melhorado
-function CombatModule.EvadeFromGroups()
-    if CombatModule.evading then return end
+-- Usar skill com cooldown
+function KillAura.UseSkill(key)
+    if KillAura.skills[key].cooldown then return false end
     
-    local player = game.Players.LocalPlayer
-    local character = player.Character or player.CharacterAdded:Wait()
-    local hrp = character:WaitForChild("HumanoidRootPart")
-    local humanoid = character:FindFirstChild("Humanoid")
+    -- Marcar como em cooldown
+    KillAura.skills[key].cooldown = true
     
-    -- Verificar se há grupos perigosos próximos
-    local dangerousGroups = {}
-    for _, enemy in pairs(CombatModule.enemies) do
-        if CombatModule.IsInDangerousGroup(enemy) then
-            table.insert(dangerousGroups, enemy)
-        end
-    end
+    -- Usar skill
+    local VIM = game:GetService("VirtualInputManager")
+    VIM:SendKeyEvent(true, key, false, game)
+    wait(0.06)
+    VIM:SendKeyEvent(false, key, false, game)
     
-    if #dangerousGroups > 0 then
-        CombatModule.evading = true
-        CombatModule.statusCallback("⚠️ Evasão de grupo iniciada!")
-        
-        -- Encontrar direção de fuga (oposta ao centro do grupo)
-        local groupCenter = Vector3.new(0,0,0)
-        for _, enemy in pairs(dangerousGroups) do
-            if enemy:FindFirstChild("HumanoidRootPart") then
-                groupCenter = groupCenter + enemy.HumanoidRootPart.Position
-            end
-        end
-        groupCenter = groupCenter / #dangerousGroups
-        
-        -- Direção oposta ao grupo + alguma altura
-        local direction = (hrp.Position - groupCenter).Unit
-        local escapePos = hrp.Position + direction * 20 + Vector3.new(0, 5, 0)
-        
-        -- Executar a evasão
-        local oldPos = hrp.CFrame
-        hrp.CFrame = CFrame.new(escapePos)
-        
-        -- Esperar até completar a evasão
-        spawn(function()
-            wait(0.5)
-            CombatModule.evading = false
-        end)
-    end
-end
-
--- Função para usar uma skill específica
-function CombatModule.UseSkill(key)
-    if CombatModule.skillCooldowns[key].active then return false end
-    
-    -- Marcar a skill como em cooldown
-    CombatModule.skillCooldowns[key].active = true
-    
-    -- Usar a skill com input virtual
-    local VirtualInputManager = game:GetService("VirtualInputManager")
-    VirtualInputManager:SendKeyEvent(true, key, false, game)
-    wait(0.08) -- Reduzido para 80ms
-    VirtualInputManager:SendKeyEvent(false, key, false, game)
-    
-    -- Reiniciar o status de combo
-    CombatModule.comboHitCount = 0
-    
-    -- Iniciar o cooldown
+    -- Iniciar cooldown
     spawn(function()
-        wait(CombatModule.skillCooldowns[key].cooldown)
-        CombatModule.skillCooldowns[key].active = false
+        wait(KillAura.skills[key].time)
+        KillAura.skills[key].cooldown = false
     end)
     
-    CombatModule.statusCallback("Skill " .. key .. " ⚡")
+    KillAura.log("Skill " .. key .. " ⚡")
     return true
 end
 
--- Função para selecionar e usar a melhor skill baseada nas circunstâncias
-function CombatModule.UseBestSkill(enemy)
-    local availableSkills = CombatModule.GetAvailableSkills()
-    if #availableSkills == 0 then return false end
-    
-    local isLowHealth = CombatModule.IsLowHealth(enemy:FindFirstChild("Humanoid"))
-    local isInGroup = CombatModule.IsInDangerousGroup(enemy)
-    local selectedKey
-    
-    -- Lógica de prioridade avançada
-    if isInGroup then
-        -- Priorizar skills AOE/fortes para grupos
-        for _, key in ipairs({"C", "X", "Z"}) do
-            if table.find(availableSkills, key) then
-                selectedKey = key
-                break
-            end
-        end
-    elseif isLowHealth then
-        -- Priorizar skills de finalização
-        for _, key in ipairs({"Z", "X"}) do
-            if table.find(availableSkills, key) then
-                selectedKey = key
-                break
-            end
-        end
-    else
-        -- Em outros casos, economizar skills fortes
-        if math.random(1, 10) <= 4 then -- 40% de chance de usar skill
-            for _, key in ipairs({"Z", "X", "C"}) do
-                if table.find(availableSkills, key) then
-                    selectedKey = key
-                    break
-                end
-            end
-        end
-    end
-    
-    if selectedKey then
-        return CombatModule.UseSkill(selectedKey)
-    end
-    
-    return false
-end
-
--- Sistema de Combo Otimizado
-function CombatModule.ExecuteComboAttack()
-    if CombatModule.normalAttackCooldown then return false end
-    CombatModule.normalAttackCooldown = true
-    
-    -- Sistema de combo dinâmico
-    if CombatModule.comboHitCount >= CombatModule.maxComboHits then
-        CombatModule.comboHitCount = 0
-        wait(0.3) -- Pausa curta ao final do combo
-    else
-        CombatModule.comboHitCount = CombatModule.comboHitCount + 1
-    end
-    
-    -- Clique para atacar com padrão de combo variável
-    local VirtualInputManager = game:GetService("VirtualInputManager")
-    
-    -- Padrões diferentes de ataque baseados no número do combo
-    if CombatModule.comboHitCount % 4 == 1 then
-        -- Ataque rápido simples
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-        wait(0.04)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-    elseif CombatModule.comboHitCount % 4 == 2 then
-        -- Clique duplo
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-        wait(0.03)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-        wait(0.03)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-        wait(0.03)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-    elseif CombatModule.comboHitCount % 4 == 3 then
-        -- Ataque segurado
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-        wait(0.12)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-    else
-        -- Ataque final
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-        wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-        wait(0.03)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-        wait(0.05)
-        VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-    end
-    
-    -- Cooldown entre hits do combo
-    spawn(function()
-        wait(CombatModule.clickDelay)
-        CombatModule.normalAttackCooldown = false
-    end)
-    
-    return true
-end
-
--- Função simples para ataque rápido
-function CombatModule.UseQuickAttack()
-    if CombatModule.normalAttackCooldown then return false end
-    
-    CombatModule.normalAttackCooldown = true
-    
-    local VirtualInputManager = game:GetService("VirtualInputManager")
-    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, true, game, 0)
-    wait(0.04)
-    VirtualInputManager:SendMouseButtonEvent(0, 0, 0, false, game, 0)
-    
-    spawn(function()
-        wait(CombatModule.clickDelay)
-        CombatModule.normalAttackCooldown = false
-    end)
-    
-    return true
-end
-
--- Função para atualizar a lista de inimigos próximos
-function CombatModule.UpdateEnemiesList()
+-- Atualizar lista de inimigos
+function KillAura.ScanEnemies()
     local player = game.Players.LocalPlayer
     local character = player.Character or player.CharacterAdded:Wait()
     local hrp = character:WaitForChild("HumanoidRootPart")
     
-    CombatModule.enemies = {}
+    KillAura.enemies = {}
+    
+    -- Expandir raio de simulação
+    pcall(function() 
+        sethiddenproperty(player, "SimulationRadius", KillAura.detectionRange)
+    end)
     
     -- Buscar em locais comuns de inimigos
     local searchLocations = {
@@ -288,246 +226,162 @@ function CombatModule.UpdateEnemiesList()
                     
                     if not isPlayer then
                         local distance = (hrp.Position - obj.HumanoidRootPart.Position).Magnitude
-                        if distance <= CombatModule.attackRange then
-                            table.insert(CombatModule.enemies, obj)
+                        if distance <= KillAura.detectionRange then
+                            table.insert(KillAura.enemies, obj)
                         end
                     end
                 end
             end
         end
     end
-    
-    return #CombatModule.enemies
 end
 
--- Função para escolher o melhor alvo baseado na situação
-function CombatModule.SelectBestTarget()
-    if #CombatModule.enemies == 0 then return nil end
+-- Selecionar melhor alvo
+function KillAura.SelectTarget()
+    if #KillAura.enemies == 0 then return nil end
     
     local player = game.Players.LocalPlayer
     local character = player.Character or player.CharacterAdded:Wait()
     local hrp = character:WaitForChild("HumanoidRootPart")
     
-    -- Primeira prioridade: inimigos isolados com pouca vida
-    if CombatModule.prioritizeLowHealth then
-        for _, enemy in pairs(CombatModule.enemies) do
-            if enemy:FindFirstChild("Humanoid") and 
-               CombatModule.IsLowHealth(enemy.Humanoid) and
-               not CombatModule.IsInDangerousGroup(enemy) then
-                
-                return enemy
-            end
+    -- Prioridade 1: Inimigo isolado com pouca vida
+    for _, enemy in pairs(KillAura.enemies) do
+        if enemy:FindFirstChild("Humanoid") and 
+           enemy.Humanoid.Health <= enemy.Humanoid.MaxHealth * 0.4 and
+           not KillAura.IsInDangerousGroup(enemy) then
+            return enemy
         end
     end
     
-    -- Segunda prioridade: inimigo mais próximo que não esteja em grupo
-    local nearestDistance = CombatModule.attackRange
-    local nearestEnemy = nil
+    -- Prioridade 2: Inimigo isolado mais próximo
+    local nearest = nil
+    local minDist = KillAura.detectionRange
     
-    for _, enemy in pairs(CombatModule.enemies) do
+    for _, enemy in pairs(KillAura.enemies) do
         if enemy:FindFirstChild("HumanoidRootPart") and
-           not CombatModule.IsInDangerousGroup(enemy) then
+           not KillAura.IsInDangerousGroup(enemy) then
             
-            local distance = (hrp.Position - enemy.HumanoidRootPart.Position).Magnitude
-            if distance < nearestDistance then
-                nearestDistance = distance
-                nearestEnemy = enemy
+            local dist = (hrp.Position - enemy.HumanoidRootPart.Position).Magnitude
+            if dist < minDist then
+                minDist = dist
+                nearest = enemy
             end
         end
     end
     
-    if nearestEnemy then return nearestEnemy end
+    if nearest then return nearest end
     
-    -- Terceira prioridade: qualquer inimigo, até mesmo em grupo
-    -- Mas vamos pegar o mais fraco do grupo
-    local weakestEnemy = nil
+    -- Prioridade 3: Qualquer inimigo (com preferência ao mais fraco)
+    local weakest = nil
     local lowestHealth = math.huge
     
-    for _, enemy in pairs(CombatModule.enemies) do
-        if enemy:FindFirstChild("Humanoid") and enemy:FindFirstChild("HumanoidRootPart") then
+    for _, enemy in pairs(KillAura.enemies) do
+        if enemy:FindFirstChild("Humanoid") then
             if enemy.Humanoid.Health < lowestHealth then
                 lowestHealth = enemy.Humanoid.Health
-                weakestEnemy = enemy
+                weakest = enemy
             end
         end
     end
     
-    return weakestEnemy
+    return weakest
 end
 
--- Função principal KillAura otimizada
-function CombatModule.PerformKillAura()
+-- Executor principal do KillAura
+function KillAura.Execute()
     local player = game.Players.LocalPlayer
     local character = player.Character or player.CharacterAdded:Wait()
     local hrp = character:WaitForChild("HumanoidRootPart")
-    local humanoid = character:FindFirstChild("Humanoid")
     
-    -- Expandir raio de simulação para alcançar mais longe
-    pcall(function() 
-        sethiddenproperty(player, "SimulationRadius", 1000)
-    end)
+    -- Atualizar inimigos
+    KillAura.ScanEnemies()
     
-    -- Atualizar lista de inimigos
-    CombatModule.UpdateEnemiesList()
-    
-    -- Verificar se precisamos evadir de grupos
-    if #CombatModule.enemies >= CombatModule.maxEnemyGroupSize then
-        CombatModule.EvadeFromGroups()
-        if CombatModule.evading then return end -- Aguardar evasão completar
+    -- Decidir se esquivar baseado na quantidade de inimigos e grupos
+    local groupCount = 0
+    for _, enemy in pairs(KillAura.enemies) do
+        if KillAura.IsInDangerousGroup(enemy) then
+            groupCount = groupCount + 1
+        end
     end
     
-    -- Exibir informações de status
-    local cooldownInfo = ""
-    for key, data in pairs(CombatModule.skillCooldowns) do
-        cooldownInfo = cooldownInfo .. (data.active and "⌛" or "✅") .. key .. " "
+    -- Se temos muitos grupos ou inimigos, esquivar
+    if groupCount >= 1 or #KillAura.enemies >= (3) then
+        KillAura.Evade()
+        -- Retornar e esperar próximo ciclo depois da esquiva
+        if KillAura.evading then return end
     end
     
-    -- Selecionar o melhor alvo
-    local bestTarget = CombatModule.SelectBestTarget()
+    -- Selecionar alvo
+    local target = KillAura.SelectTarget()
     
-    -- Se temos um alvo válido
-    if bestTarget and bestTarget:FindFirstChild("Humanoid") and 
-       bestTarget.Humanoid.Health > 0 and bestTarget:FindFirstChild("HumanoidRootPart") then
+    -- Atacar se tiver alvo
+    if target and target:FindFirstChild("HumanoidRootPart") and 
+       target:FindFirstChild("Humanoid") and target.Humanoid.Health > 0 then
         
-        local distance = (hrp.Position - bestTarget.HumanoidRootPart.Position).Magnitude
-        local isInGroup = CombatModule.IsInDangerousGroup(bestTarget)
+        local isGroup = KillAura.IsInDangerousGroup(target)
+        local distance = (hrp.Position - target.HumanoidRootPart.Position).Magnitude
         
         -- Posicionamento tático
-        local posOffset = isInGroup and 7 or 4 -- Maior distância se for grupo
+        local attackDist = isGroup and 10 or 5 -- Maior distância para grupos
         
-        -- Salvar posição original
+        -- Posicionar para ataque
         local oldPos = hrp.CFrame
+        hrp.CFrame = target.HumanoidRootPart.CFrame * CFrame.new(0, isGroup and 2 or 0, attackDist)
         
-        -- Estratégia de ataque
-        if isInGroup then
-            -- Para grupos: manter distância e usar skills mais fortes
-            hrp.CFrame = bestTarget.HumanoidRootPart.CFrame * CFrame.new(0, 1, posOffset)
-            
-            -- Prioridade absoluta para skills em grupos
-            if CombatModule.skillsActive then
-                CombatModule.UseBestSkill(bestTarget)
-            else
-                CombatModule.UseQuickAttack() -- Ataque rápido sem combo para grupos
-            end
-        else
-            -- Para inimigos isolados: aproximar e usar combo ou skill
-            hrp.CFrame = bestTarget.HumanoidRootPart.CFrame * CFrame.new(0, 0, posOffset)
-            
-            -- Verificar se devemos usar skill ou ataque normal
-            local usedSkill = false
-            if CombatModule.skillsActive then
-                -- Priorizar skill se inimigo com pouca vida
-                if CombatModule.IsLowHealth(bestTarget.Humanoid) then
-                    usedSkill = CombatModule.UseBestSkill(bestTarget)
-                elseif math.random(1, 10) <= 3 then
-                    -- 30% de chance para outros casos
-                    usedSkill = CombatModule.UseBestSkill(bestTarget)
-                end
-            end
-            
-            -- Se não usou skill, usar ataque normal
-            if not usedSkill then
-                if CombatModule.comboModeActive then
-                    CombatModule.ExecuteComboAttack()
-                else
-                    CombatModule.UseQuickAttack()
-                end
-            end
-        end
+        -- Executar ataque
+        KillAura.Attack(target)
         
-        -- Status do alvo
-        local health = math.floor((bestTarget.Humanoid.Health / bestTarget.Humanoid.MaxHealth) * 100)
-        local statusIcon = isInGroup and "⚠️ GRUPO" or "🎯"
-        CombatModule.statusCallback(statusIcon .. " Alvo: " .. health .. "% | " .. cooldownInfo)
+        -- Mostrar status
+        local health = math.floor((target.Humanoid.Health / target.Humanoid.MaxHealth) * 100)
+        local status = isGroup and "⚠️ GRUPO" or "🎯"
+        KillAura.log(status .. " Alvo: " .. health .. "% | " .. (#KillAura.enemies) .. " inimigos")
         
-        -- Verificar se o alvo morreu
-        if bestTarget.Humanoid.Health <= 0 then
-            CombatModule.statusCallback("✅ Inimigo eliminado!")
-        end
-        
-        -- Voltar à posição original com delay
+        -- Retornar à posição após breve delay
         spawn(function()
-            wait(0.15)
-            hrp.CFrame = oldPos
+            wait(0.1)
+            if KillAura.active then
+                hrp.CFrame = oldPos
+            end
         end)
     else
-        CombatModule.statusCallback("🔍 Procurando (" .. #CombatModule.enemies .. " próximos) | " .. cooldownInfo)
+        KillAura.log("🔍 Procurando | " .. #KillAura.enemies .. " inimigos próximos")
+    end
+    
+    -- Verificar se precisamos esquivar após o ataque
+    if #KillAura.enemies >= 3 and math.random(1, 3) == 1 then
+        KillAura.Evade()
     end
 end
 
--- Função para iniciar o KillAura
-function CombatModule.Start()
-    if CombatModule.active then return end
+-- Iniciar o KillAura
+function KillAura.Start()
+    if KillAura.active then return end
     
-    CombatModule.active = true
-    CombatModule.statusCallback("✅ KillAura Anti-Raid ativado")
+    KillAura.active = true
+    KillAura.log("✅ KillAura Ativado (Detecção: " .. KillAura.detectionRange .. ")")
     
-    -- Loop principal otimizado
+    -- Loop principal
     spawn(function()
-        while CombatModule.active and wait(0.15) do -- Loop mais rápido para melhor resposta
-            pcall(CombatModule.PerformKillAura)
+        while KillAura.active and wait(0.1) do -- Mais rápido para melhor responsividade
+            pcall(KillAura.Execute)
         end
     end)
 end
 
--- Função para parar o KillAura
-function CombatModule.Stop()
-    CombatModule.active = false
-    CombatModule.statusCallback("❌ KillAura desativado")
-    CombatModule.comboHitCount = 0
-    CombatModule.enemies = {}
+-- Parar o KillAura
+function KillAura.Stop()
+    KillAura.active = false
+    KillAura.log("❌ KillAura Desativado")
 end
 
--- Função para alternar o KillAura
-function CombatModule.Toggle()
-    if CombatModule.active then
-        CombatModule.Stop()
+-- Alternar KillAura
+function KillAura.Toggle()
+    if KillAura.active then
+        KillAura.Stop()
     else
-        CombatModule.Start()
+        KillAura.Start()
     end
-    return CombatModule.active
+    return KillAura.active
 end
 
--- Funções auxiliares mantidas para compatibilidade
-CombatModule.ToggleKillAura = CombatModule.Toggle
-CombatModule.StartKillAura = CombatModule.Start
-CombatModule.StopKillAura = CombatModule.Stop
-CombatModule.killAuraActive = CombatModule.active
-
--- Função para alternar uso de skills
-function CombatModule.ToggleSkills()
-    CombatModule.skillsActive = not CombatModule.skillsActive
-    CombatModule.statusCallback(CombatModule.skillsActive and "Skills ✅" or "Skills ❌")
-    return CombatModule.skillsActive
-end
-
--- Função para alternar modo combo
-function CombatModule.ToggleComboMode()
-    CombatModule.comboModeActive = not CombatModule.comboModeActive
-    CombatModule.comboHitCount = 0
-    CombatModule.statusCallback(CombatModule.comboModeActive and "Combo ✅" or "Combo ❌")
-    return CombatModule.comboModeActive
-end
-
--- Função para definir o alcance
-function CombatModule.SetRange(range)
-    if tonumber(range) and tonumber(range) > 0 then
-        CombatModule.attackRange = tonumber(range)
-        CombatModule.statusCallback("Alcance: " .. CombatModule.attackRange)
-        return true
-    end
-    return false
-end
-
--- Função para definir callback de status
-function CombatModule.SetStatusCallback(callback)
-    if type(callback) == "function" then
-        CombatModule.statusCallback = callback
-        return true
-    end
-    return false
-end
-
-print("Módulo KillAura Anti-Raid v4.0 carregado!")
-
-return CombatModule
+return KillAura
