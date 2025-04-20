@@ -3,7 +3,7 @@
 
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
-local menus = require("registrar_menu")
+local menus = loadstring(game:HttpGet("https://raw.githubusercontent.com/DragonSCRIPTS/hub_Ultra/refs/heads/main/Interface/Administrar%20informa%C3%A7%C3%B5es/registrar_menu.lua"))()
 
 local MenuBar = {}
 MenuBar.__index = MenuBar
